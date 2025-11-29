@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeoTripo Native</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; background-color: #000; color: white; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* UI 层样式 */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 350px; height: 100%; background: rgba(10, 10, 12, 0.85); backdrop-filter: blur(12px); border-right: 1px solid #333; z-index: 10; padding: 25px; display: flex; flex-direction: column; transition: transform 0.3s ease; }
+        
+        /* 输入框和按钮 */
+        textarea { background: #111; border: 1px solid #333; color: #eee; width: 100%; height: 120px; padding: 10px; border-radius: 6px; resize: none; outline: none; font-size: 14px; margin-bottom: 15px; }
+        textarea:focus { border-color: #00ff88; }
+        
+        button { background: #00ff88; color: #000; border: none; width: 100%; padding: 12px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px; }
+        button:hover { background: #00cc6a; box-shadow: 0 0 15px rgba(0, 255, 136, 0.4); }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; }
+
+        /* 日志区域 */
+        #log-area { flex: 1; margin-top: 20px; background: #000; border: 1px solid #222; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 12px; color: #00ff88; overflow-y: auto; opacity: 0.8; }
+        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #111; padding-bottom: 2px; word-break: break-all; }
+        .log-error { color: #ff4444; }
+
+        /* 加载动画 */
+        #loader { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: none; text-align: center; }
+        .spinner { width: 40px; height: 40px; border: 3px solid transparent; border-top: 3px solid #00ff88; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+
+    <!-- 引入 Three.js 和 Gradio -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "@gradio/client": "https://cdn.jsdelivr.net/npm/@gradio/client@0.1.4/dist/index.min.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- 3D 容器 -->
+    <div id="canvas-container"></div>
+
+    <!-- 加载提示 -->
+    <div id="loader">
+        <div class="spinner"></div>
+        <div id="loader-text" style="font-family: monospace; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px;">GENERATING...</div>
+    </div>
+
+    <!-- UI 控制面板 -->
+    <div id="ui-layer">
+        <h1 class="text-2xl font-black mb-1 text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500">NEO·TRIPO</h1>
+        <p class="text-xs text-gray-500 mb-6 tracking-widest">NATIVE JS EDITION</p>
+
+        <label class="text-xs text-gray-400 mb-2 block">PROMPT</label>
+        <textarea id="prompt-input" placeholder="Description (e.g., A futuristic helmet)..."></textarea>
+        
+        <button id="generate-btn" onclick="startGeneration()">GENERATE 3D</button>
+
+        <div id="log-area">
+            <div class="log-entry">> System Ready.</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+        import { client } from "@gradio/client";
+
+        // ==========================================
+        // 🔴 请修改这里的 ID 🔴
+        // ==========================================
+        const YOUR_SPACE_ID = "XLBxlb/my-3d-backend"; 
+        // ==========================================
+
+        // 1. 初始化 Three.js 场景
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111); // 深灰色背景
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 1, 4);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        container.appendChild(renderer.domElement);
+
+        // 环境光照
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+        // 网格地面
+        const grid = new THREE.GridHelper(20, 40, 0x333333, 0x222222);
+        scene.add(grid);
+
+        // 控制器
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 0.5, 0);
+        controls.update();
+        controls.enableDamping = true;
+
+        // 模型加载器
+        const loader = new GLTFLoader();
+        let currentModel = null;
+
+        // 渲染循环
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            // 如果有模型，让它旋转一下
+            if(currentModel) {
+               // currentModel.rotation.y += 0.002; 
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // 窗口大小自适应
+        window.onresize = function () {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+
+        // 日志辅助函数
+        function log(msg, isError = false) {
+            const logArea = document.getElementById('log-area');
+            const div = document.createElement('div');
+            div.className = isError ? 'log-entry log-error' : 'log-entry';
+            div.innerText = `> ${msg}`;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
+            console.log(msg);
+        }
+
+        // 2. 核心生成逻辑
+        window.startGeneration = async function() {
+            const prompt = document.getElementById('prompt-input').value;
+            const btn = document.getElementById('generate-btn');
+            const loadingUi = document.getElementById('loader');
+
+            if (!prompt) {
+                log("Please enter a prompt first.", true);
+                return;
+            }
+
+            // UI 状态更新
+            btn.disabled = true;
+            btn.innerText = "CONNECTING...";
+            loadingUi.style.display = "block";
+            log("Initiating connection to ModelScope...");
+
+            try {
+                // 连接 Gradio
+                const app = await client(YOUR_SPACE_ID);
+                
+                log("Connected! Sending prompt...");
+                btn.innerText = "GENERATING...";
+                log("(Waiting for GPU/CPU inference...)");
+
+                // 发送预测请求
+                const result = await app.predict(0, [prompt]);
+                
+                log("Data received! Parsing...");
+
+                if (result.data && result.data[0]) {
+                    let fileUrl = result.data[0];
+                    // 兼容性处理：有时候返回对象，有时候直接是 URL
+                    if (typeof fileUrl === 'object' && fileUrl.url) {
+                        fileUrl = fileUrl.url;
+                    }
+
+                    log("Downloading 3D Model...");
+                    loadModel(fileUrl);
+                } else {
+                    throw new Error("Invalid response format");
+                }
+
+            } catch (e) {
+                log(`Error: ${e.message}`, true);
+                alert("Error: " + e.message);
+                btn.disabled = false;
+                btn.innerText = "GENERATE 3D";
+                loadingUi.style.display = "none";
+            }
+        };
+
+        // 加载模型到场景
+        function loadModel(url) {
+            // 移除旧模型
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel = null;
+            }
+
+            loader.load(url, function (gltf) {
+                currentModel = gltf.scene;
+                
+                // 自动调整模型大小和位置
+                const box = new THREE.Box3().setFromObject(currentModel);
+                const size = box.getSize(new THREE.Vector3()).length();
+                const center = box.getCenter(new THREE.Vector3());
+                
+                currentModel.position.x += (currentModel.position.x - center.x);
+                currentModel.position.y += (currentModel.position.y - center.y + 0.5); // 稍微抬高
+                currentModel.position.z += (currentModel.position.z - center.z);
+                
+                // 缩放规范化
+                const scale = 2 / size;
+                currentModel.scale.set(scale, scale, scale);
+
+                scene.add(currentModel);
+                
+                log("Render Complete!");
+                
+                // 恢复 UI
+                const btn = document.getElementById('generate-btn');
+                const loadingUi = document.getElementById('loader');
+                btn.disabled = false;
+                btn.innerText = "GENERATE 3D";
+                loadingUi.style.display = "none";
+
+            }, undefined, function (error) {
+                log("Error loading GLB file.", true);
+                console.error(error);
+            });
+        }
+    </script>
+</body>
+</html>
